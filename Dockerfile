@@ -1,24 +1,40 @@
-# 1. Build Stage
-FROM eclipse-temurin:21-jdk AS build
+# ----------------------------------------------------
+# 1. Build Stage: Gradle 빌드 수행
+# ----------------------------------------------------
+# Alpine Linux 위에 Java 21 JDK가 설치된 Eclipse Temurin Docker 이미지
+FROM eclipse-temurin:21-jdk-alpine AS builder
+
 WORKDIR /app
 
-# 빌드 효율을 위해 설정 파일과 Gradle Wrapper 먼저 복사
-COPY gradlew build.gradle settings.gradle /app/
-COPY gradle /app/gradle
-COPY src /app/src
+# Gradle 래퍼 및 설정 파일 복사 (캐시 활용을 위해 먼저 복사)
+COPY gradlew .
+COPY gradle gradle
+COPY build.gradle .
+COPY settings.gradle .
 
-# 프로젝트에 고정된 Gradle Wrapper로 테스트 제외하고 jar 빌드
-RUN chmod +x gradlew && ./gradlew clean bootJar -x test --no-daemon
+# Windows 환경에서 작성된 gradlew 파일의 실행 권한 처리
+RUN chmod +x ./gradlew
 
-# 2. Run Stage
-FROM amazoncorretto:21-al2023-headless
+# 소스 코드 복사
+COPY src src
+
+# 애플리케이션 빌드 (테스트는 CI 단계에서 수행하므로 제외)
+RUN ./gradlew build -x test --no-daemon
+
+# ----------------------------------------------------
+# 2. Run Stage: 경량화된 JRE 21 환경에서 실행
+# ----------------------------------------------------
+# 실행 환경도 동일하게 JRE 21 경량화 이미지로 변경
+FROM eclipse-temurin:21-jre-alpine
+
 WORKDIR /app
 
-# 빌드된 jar 파일을 app.jar로 복사
-COPY --from=build /app/build/libs/*.jar app.jar
+# 빌드 스테이지에서 생성된 jar 파일만 복사
+COPY --from=builder /app/build/libs/*.jar app.jar
 
-# 타임존 설정 (한국 시간)
-ENV TZ=Asia/Seoul
-EXPOSE 8080
+# Render 등 PaaS 환경에서 주입되는 PORT 변수를 기본값 8080으로 설정
+ENV PORT=8080
+EXPOSE ${PORT}
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# 애플리케이션 실행
+ENTRYPOINT ["sh", "-c", "java -Dserver.port=${PORT} -jar app.jar"]
